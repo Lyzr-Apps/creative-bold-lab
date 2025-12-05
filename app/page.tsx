@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
-import { Menu, X, Download, ArrowRight, Clock, CheckCircle, AlertCircle } from 'lucide-react'
+import { Menu, X, Download, ArrowRight, Clock, CheckCircle, AlertCircle, Mic, MicOff, Volume2, VolumeX, Play, Square } from 'lucide-react'
 
 type ViewType = 'dashboard' | 'setup' | 'interview' | 'transcript'
 type InterviewStatus = 'completed' | 'evaluated' | 'pending'
@@ -337,6 +337,11 @@ function InterviewChat({ session, onComplete }: any) {
   const [loading, setLoading] = useState(false)
   const [timeLeft, setTimeLeft] = useState(20 * 60) // 20 minutes in seconds
   const [showEndDialog, setShowEndDialog] = useState(false)
+  const [isListening, setIsListening] = useState(false)
+  const [isSpeaking, setIsSpeaking] = useState(false)
+  const [recognitionRef, setRecognitionRef] = useState<any>(null)
+  const [currentTranscript, setCurrentTranscript] = useState('')
+  const [voiceEnabled, setVoiceEnabled] = useState(true)
 
   // Timer countdown
   useEffect(() => {
@@ -350,6 +355,44 @@ function InterviewChat({ session, onComplete }: any) {
     return () => clearInterval(timer)
   }, [timeLeft])
 
+  // Initialize speech recognition
+  useEffect(() => {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+    if (SpeechRecognition && !recognitionRef) {
+      const recognition = new SpeechRecognition()
+      recognition.continuous = true
+      recognition.interimResults = true
+      recognition.lang = 'en-US'
+
+      recognition.onstart = () => {
+        setIsListening(true)
+        setCurrentTranscript('')
+      }
+
+      recognition.onresult = (event: any) => {
+        let interim = ''
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript
+          if (event.results[i].isFinal) {
+            setCurrentTranscript(prev => prev + transcript + ' ')
+          } else {
+            interim += transcript
+          }
+        }
+      }
+
+      recognition.onerror = (event: any) => {
+        console.error('Speech recognition error:', event.error)
+      }
+
+      recognition.onend = () => {
+        setIsListening(false)
+      }
+
+      setRecognitionRef(recognition)
+    }
+  }, [recognitionRef])
+
   // Auto-scroll
   useEffect(() => {
     const scrollArea = document.getElementById('chat-scroll')
@@ -357,6 +400,44 @@ function InterviewChat({ session, onComplete }: any) {
       scrollArea.scrollTop = scrollArea.scrollHeight
     }
   }, [messages])
+
+  // Text-to-speech function
+  const speakText = (text: string) => {
+    if (!voiceEnabled) return
+
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.rate = 1.0
+    utterance.pitch = 1.0
+    utterance.volume = 1.0
+
+    utterance.onstart = () => setIsSpeaking(true)
+    utterance.onend = () => setIsSpeaking(false)
+    utterance.onerror = () => setIsSpeaking(false)
+
+    window.speechSynthesis.cancel()
+    window.speechSynthesis.speak(utterance)
+  }
+
+  const startListening = () => {
+    if (recognitionRef && !isListening) {
+      setCurrentTranscript('')
+      recognitionRef.start()
+    }
+  }
+
+  const stopListening = () => {
+    if (recognitionRef && isListening) {
+      recognitionRef.stop()
+    }
+  }
+
+  const submitVoiceInput = () => {
+    if (currentTranscript.trim()) {
+      setInput(currentTranscript.trim())
+      setCurrentTranscript('')
+      stopListening()
+    }
+  }
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -369,6 +450,7 @@ function InterviewChat({ session, onComplete }: any) {
 
     const userMessage = { role: 'user', content: input, id: `msg-${messages.length}` }
     setMessages(prev => [...prev, userMessage])
+    const userText = input
     setInput('')
     setLoading(true)
 
@@ -377,7 +459,7 @@ function InterviewChat({ session, onComplete }: any) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          message: input,
+          message: userText,
           agent_id: '69328108e6ce9b78c3893b6e',
           context: {
             candidate_name: session.candidateName,
@@ -400,6 +482,11 @@ function InterviewChat({ session, onComplete }: any) {
         }
 
         setMessages(prev => [...prev, { role: 'assistant', content: agentMessage, id: `msg-${prev.length}` }])
+
+        // Speak the agent response if voice is enabled
+        if (voiceEnabled) {
+          speakText(agentMessage)
+        }
       }
     } catch (error) {
       console.error('Error:', error)
@@ -520,9 +607,78 @@ function InterviewChat({ session, onComplete }: any) {
         </div>
       </ScrollArea>
 
-      {/* Input Area */}
+      {/* Input Area - Voice & Text Combined */}
       <div className="bg-white border-t border-gray-200 px-6 py-4">
-        <div className="max-w-3xl mx-auto flex gap-3">
+        <div className="max-w-3xl mx-auto space-y-3">
+          {/* Voice Controls */}
+          <div className="flex gap-2 items-center">
+            <Button
+              onClick={() => setVoiceEnabled(!voiceEnabled)}
+              variant={voiceEnabled ? 'default' : 'outline'}
+              size="sm"
+              className={voiceEnabled ? 'bg-blue-600 hover:bg-blue-700' : ''}
+            >
+              {voiceEnabled ? (
+                <>
+                  <Volume2 className="w-4 h-4 mr-2" />
+                  Voice On
+                </>
+              ) : (
+                <>
+                  <VolumeX className="w-4 h-4 mr-2" />
+                  Voice Off
+                </>
+              )}
+            </Button>
+
+            <Button
+              onClick={isListening ? stopListening : startListening}
+              variant={isListening ? 'default' : 'outline'}
+              size="sm"
+              className={isListening ? 'bg-red-600 hover:bg-red-700 animate-pulse' : ''}
+            >
+              {isListening ? (
+                <>
+                  <MicOff className="w-4 h-4 mr-2" />
+                  Stop Listening
+                </>
+              ) : (
+                <>
+                  <Mic className="w-4 h-4 mr-2" />
+                  Start Speaking
+                </>
+              )}
+            </Button>
+
+            {currentTranscript && (
+              <Button
+                onClick={submitVoiceInput}
+                size="sm"
+                className="bg-green-600 hover:bg-green-700"
+              >
+                Use Voice Input
+              </Button>
+            )}
+
+            {isSpeaking && (
+              <div className="flex items-center gap-2 text-sm text-blue-600 ml-auto">
+                <div className="w-2 h-2 bg-blue-600 rounded-full animate-pulse" />
+                Interviewer Speaking...
+              </div>
+            )}
+          </div>
+
+          {/* Voice Transcript Display */}
+          {currentTranscript && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+              <p className="text-sm text-gray-700">
+                <span className="font-semibold text-gray-900">Detected: </span>
+                {currentTranscript}
+              </p>
+            </div>
+          )}
+
+          {/* Text Input (Optional) */}
           <Textarea
             value={input}
             onChange={e => setInput(e.target.value)}
@@ -532,19 +688,22 @@ function InterviewChat({ session, onComplete }: any) {
                 sendMessage()
               }
             }}
-            placeholder="Type your response..."
+            placeholder="Or type your response..."
             className="border-gray-300 resize-none"
             rows={3}
             disabled={loading}
           />
-          <Button
-            onClick={sendMessage}
-            disabled={loading || !input.trim()}
-            className="bg-blue-600 hover:bg-blue-700 self-end"
-            size="lg"
-          >
-            Send
-          </Button>
+
+          <div className="flex gap-3 justify-end">
+            <Button
+              onClick={sendMessage}
+              disabled={loading || (!input.trim() && !currentTranscript.trim())}
+              className="bg-blue-600 hover:bg-blue-700"
+              size="lg"
+            >
+              Send Response
+            </Button>
+          </div>
         </div>
       </div>
     </div>
